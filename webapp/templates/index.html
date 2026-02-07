@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-6 text-center">
+            <h1 class="display-4 mb-4">{{ t.welcome }}</h1>
+            <p class="lead mb-1">{{ t.main_description }}</p>
+            <p class="text-muted mb-4">{{ t.apple_calendar_note }}</p>
+            <a href="{{ url_for('login', lang=current_lang) }}" class="btn btn-primary btn-lg" id="loginButton">
+                <i class="bi bi-google me-2"></i>{{ t.login_with_google }}
+            </a>
+        </div>
+    </div>
+</div>
+
+
+{% endblock %} 

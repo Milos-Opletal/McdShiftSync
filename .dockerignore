@@ -1,0 +1,7 @@
+.venv
+__pycache__
+.idea
+build
+credentials_old.json
+db/*
+*.tar

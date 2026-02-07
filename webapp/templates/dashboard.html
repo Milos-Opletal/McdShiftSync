@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">{{ t.your_account }}</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <h6>{{ t.google_account }}</h6>
+                        <p class="mb-0">{{ google_email }}</p>
+                    </div>
+                    <div class="mb-3">
+                        <h6>{{ t.mcd_account }}</h6>
+                        <div class="d-flex align-items-center">
+                            <p class="mb-0">{{ mcd_email }}</p>
+                            <span class="ms-2" id="accountStatus">
+                                <span class="badge bg-secondary">{{ t.checking }}</span>
+                            </span>
+                        </div>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <a href="{{ url_for('link_mcd', lang=current_lang) }}" class="btn btn-primary">
+                            {{ t.update_credentials }}
+                        </a>
+                        <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                            {{ t.delete_data }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">{{ t.calendar_sync }}</h5>
+                </div>
+                <div class="card-body" data-needs-initial-sync="{{ needs_initial_sync|default(false)|string|lower }}">
+                    <div id="syncStatus">
+                        {% if sync_status.timestamp %}
+                            {% if sync_status.success %}
+                                <div class="alert alert-success">
+                                    <i class="bi bi-check-circle me-2"></i>{{ t.sync_success }}
+                                    <br>
+                                    <small>{{ sync_status.timestamp|datetime }}</small>
+                                </div>
+                            {% else %}
+                                <div class="alert alert-danger">
+                                    <i class="bi bi-exclamation-triangle me-2"></i>{{ t.last_sync_failed }}
+                                    {% if sync_status.error %}
+                                        <br>
+                                        <small>{{ sync_status.error }}</small>
+                                    {% endif %}
+                                    <br>
+                                    <small>{{ sync_status.timestamp|datetime }}</small>
+                                </div>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+
+                    <button id="syncButton" class="btn btn-primary" onclick="syncCalendar()">
+                        <i class="bi bi-arrow-repeat me-2"></i>{{ t.sync_now }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteModalLabel">{{ t.delete_data }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                {{ t.delete_confirm }}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t.cancel }}</button>
+                <form action="{{ url_for('delete_data', lang=current_lang) }}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-danger">{{ t.delete_data }}</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Check McDonald's account status
+    fetch('{{ url_for("api_verify_mcd_account", lang=current_lang) }}')
+        .then(response => response.json())
+        .then(data => {
+            const statusElement = document.getElementById('accountStatus');
+            if (data.valid) {
+                statusElement.innerHTML = '<span class="badge bg-success">{{ t.valid }}</span>';
+            } else {
+                statusElement.innerHTML = '<span class="badge bg-danger">{{ t.invalid }}</span>';
+            }
+        })
+        .catch(error => {
+            document.getElementById('accountStatus').innerHTML = 
+                '<span class="badge bg-warning">{{ t.error }}</span>';
+        });
+
+    // Handle initial sync if needed
+    const needsInitialSync = document.querySelector('.card-body[data-needs-initial-sync]').dataset.needsInitialSync === 'true';
+    if (needsInitialSync) {
+        setTimeout(() => {
+            syncCalendar();
+        }, 1000);
+    }
+});
+
+function syncCalendar() {
+    const syncButton = document.getElementById('syncButton');
+    const syncStatus = document.getElementById('syncStatus');
+    
+    // Disable button and show loading state
+    syncButton.disabled = true;
+    syncButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>{{ t.syncing }}';
+    
+    // Show loading status
+    syncStatus.innerHTML = `
+        <div class="alert alert-info">
+            <i class="bi bi-arrow-repeat me-2"></i>{{ t.syncing }}
+        </div>
+    `;
+    
+    // Perform sync
+    fetch('{{ url_for("sync_calendar", lang=current_lang) }}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        // Update sync status
+        if (data.success) {
+            syncStatus.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle me-2"></i>${data.message}
+                    <br>
+                    <small>${new Date(data.timestamp).toLocaleString()}</small>
+                </div>
+            `;
+        } else {
+            syncStatus.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>${data.message}
+                    <br>
+                    <small>${new Date(data.timestamp).toLocaleString()}</small>
+                </div>
+            `;
+        }
+    })
+    .catch(error => {
+        syncStatus.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle me-2"></i>{{ t.sync_error }}
+                <br>
+                <small>${error.message}</small>
+            </div>
+        `;
+    })
+    .finally(() => {
+        // Reset button state
+        syncButton.disabled = false;
+        syncButton.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>{{ t.sync_now }}';
+    });
+}
+
+function copyLink() {
+    const calendarLink = document.getElementById('calendarLink');
+    calendarLink.select();
+    document.execCommand('copy');
+    
+    // Show feedback
+    const copyButton = calendarLink.nextElementSibling;
+    const originalText = copyButton.innerHTML;
+    copyButton.innerHTML = '<i class="bi bi-check me-1"></i>{{ t.link_copied }}';
+    
+    setTimeout(() => {
+        copyButton.innerHTML = originalText;
+    }, 2000);
+}
+</script>
+{% endblock %} 

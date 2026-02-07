@@ -1,0 +1,107 @@
+body {
+    background-color: #f8f9fa;
+}
+
+.auth-container {
+    max-width: 400px;
+    margin: 2rem auto;
+    padding: 2rem;
+    background-color: white;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+.auth-container h1 {
+    margin-bottom: 1.5rem;
+    color: #343a40;
+    text-align: center;
+}
+
+.auth-container .btn-primary {
+    width: 100%;
+    padding: 0.75rem;
+    font-size: 1.1rem;
+    margin-top: 1rem;
+}
+
+.auth-container .google-btn {
+    background-color: #4285f4;
+    border-color: #4285f4;
+}
+
+.auth-container .google-btn:hover {
+    background-color: #357abd;
+    border-color: #357abd;
+}
+
+.delete-btn {
+    background-color: #dc3545;
+    border-color: #dc3545;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 5px;
+    text-decoration: none;
+    display: inline-block;
+    margin-top: 1rem;
+}
+
+.delete-btn:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+    color: white;
+}
+
+.account-info {
+    background-color: white;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    margin-top: 2rem;
+}
+
+.account-info h2 {
+    color: #343a40;
+    margin-bottom: 1.5rem;
+}
+
+.account-info p {
+    margin-bottom: 1rem;
+    font-size: 1.1rem;
+}
+
+.account-label {
+    font-weight: bold;
+    color: #6c757d;
+}
+
+/* Password toggle button styles */
+#togglePassword {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#togglePassword:hover {
+    background-color: #e9ecef;
+}
+
+#togglePassword:active {
+    background-color: #dee2e6;
+}
+
+/* Logout button styles */
+.nav-item.bg-primary {
+    transition: all 0.2s ease;
+}
+
+.nav-item.bg-primary:hover {
+    background-color: #0056b3 !important;
+    transform: translateY(-1px);
+}
+
+.nav-item.bg-primary .nav-link {
+    transition: all 0.2s ease;
+}
+
+.nav-item.bg-primary:hover .nav-link {
+    color: #fff !important;
+} 

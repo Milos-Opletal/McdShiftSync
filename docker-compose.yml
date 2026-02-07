@@ -1,0 +1,36 @@
+services:
+  # Service 1: The Website
+  web:
+    image: mcd-shift-sync:latest
+    container_name: mcd-shift-sync-web
+    restart: unless-stopped
+    command: gunicorn --bind 0.0.0.0:4330 --pythonpath /app/webapp app:app
+    ports:
+      - "4330:4330"
+    volumes:
+      - /home/milos/McdScraper:/app/db
+    networks:
+      - nginx_default
+    environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+      - PYTHONUNBUFFERED=1
+
+  # Service 2: The Background Worker
+  worker:
+    image: mcd-shift-sync:latest
+    container_name: mcd-shift-sync-worker
+    restart: unless-stopped
+    command: python3 /app/sync.py
+    volumes:
+      - /home/milos/McdScraper:/app/db
+    networks:
+      - nginx_default
+    environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - web
+
+networks:
+  nginx_default:
+    external: true
