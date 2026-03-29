@@ -4,9 +4,8 @@ import os
 import sys
 import time
 import logging
+import concurrent.futures
 from datetime import datetime, timedelta
-
-import dateutil.parser
 import pytz
 from flask import Flask
 from google.oauth2.credentials import Credentials
@@ -30,9 +29,11 @@ sys.path.append(ROOT_DIR)
 
 from webapp.db_manager import db, User, get_user_by_google_id, update_last_sync, set_sync_status, set_calendar_id, \
     delete_user, create_or_update_user, get_sync_status
-from webapp.mcd_manager import get_shifts_from_website, get_name
+from MyMcdAPI import MyMcdAPI
 
 TIMEZONE = 'Europe/Prague'
+MANAGER_EMAIL = '***REDACTED_EMAIL***'
+MANAGER_PASSWORD = '***REDACTED_PASSWORD***'
 
 
 def get_yesterday():
@@ -111,109 +112,83 @@ def create_calendar(service, calendar_name, user):
         return None
 
 
-def are_shifts_equal(calendar_event, new_shift):
-    """Compare if a calendar event matches a new shift."""
+
+
+def process_calendar_action(action, creds, calendar_id, payload):
     try:
-        # Get the interval from the new shift
-        interval = new_shift['intervals'][0]
-        new_start = dateutil.parser.parse(interval['from'])
-        new_end = dateutil.parser.parse(interval['to'])
-
-        # Make sure new times are timezone-aware
-        timezone = pytz.timezone(TIMEZONE)
-        new_start = timezone.localize(new_start) if new_start.tzinfo is None else new_start
-        new_end = timezone.localize(new_end) if new_end.tzinfo is None else new_end
-
-        # Get times from calendar event
-        cal_start = dateutil.parser.parse(calendar_event['start']['dateTime'])
-        cal_end = dateutil.parser.parse(calendar_event['end']['dateTime'])
-
-        # Make sure calendar times are in the same timezone
-        cal_start = cal_start.astimezone(timezone)
-        cal_end = cal_end.astimezone(timezone)
-
-        if new_start != cal_start or new_end != cal_end:
-            return False
-
-        # Compare summary (shift type)
-        cal_summary = calendar_event['summary']
-        new_summary = create_event_summary(new_shift)
-        if new_summary != cal_summary:
-            return False
-
-        cal_description = calendar_event['description']
-        new_description = create_event_description(new_shift)
-        if new_description != cal_description:
-            return False
-
+        # Build thread-safe localized service for this specific network request
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        if action == "create":
+            service.events().insert(calendarId=calendar_id, body=payload).execute()
+        elif action == "delete":
+            service.events().delete(calendarId=calendar_id, eventId=payload).execute()
         return True
     except Exception as e:
-        logger.error(f"Error comparing shifts: {e}")
+        logger.error(f"Error during threaded Google connection ({action}): {e}")
         return False
 
-
-def batch_create_events(service, calendar_id, events_data):
-    """Batch create events in the calendar."""
+def batch_create_events(creds, calendar_id, events_data):
+    """Create events concurrently to bypass crippling Google Batch latency constraints."""
     if not events_data:
-        logger.info("No events to create")
         return False
 
-    logger.info(f"Attempting to create {len(events_data)} events in batch")
-    batch = service.new_batch_http_request()
-    for event_data in events_data:
-        # Parse and reformat the dates to RFC 3339 format
-        start_time = datetime.strptime(event_data['start']['dateTime'], "%Y-%m-%d %H:%M:%S")
-        end_time = datetime.strptime(event_data['end']['dateTime'], "%Y-%m-%d %H:%M:%S")
+    logger.info(f"Attempting to create {len(events_data)} events concurrently")
+    success = True
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(process_calendar_action, "create", creds, calendar_id, e) for e in events_data]
+        for future in concurrent.futures.as_completed(futures):
+            if not future.result():
+                success = False
 
-        # Make dates timezone-aware
-        timezone = pytz.timezone(TIMEZONE)
-        start_time = timezone.localize(start_time)
-        end_time = timezone.localize(end_time)
-
-        # Create new event data with properly formatted dates
-        formatted_event_data = {"summary": event_data['summary'], "description": event_data['description'],
-                                "start": {"dateTime": start_time.isoformat(), "timeZone": TIMEZONE, },
-                                "end": {"dateTime": end_time.isoformat(), "timeZone": TIMEZONE, }, }
-
-        batch.add(service.events().insert(calendarId=calendar_id, body=formatted_event_data))
-
-    try:
-        batch.execute()
-        logger.info(f"Successfully created {len(events_data)} events in batch")
-        return True
-    except Exception as e:
-        logger.error(f"Error executing batch create: {e}")
-        logger.debug(f"First event data: {events_data[0]}")
-        return False
+    return success
 
 
-def batch_delete_events(service, calendar_id, event_ids):
+def batch_delete_events(creds, calendar_id, event_ids):
     if not event_ids:
         return True
 
-    batch = service.new_batch_http_request()
-    for event_id in event_ids:
-        batch.add(service.events().delete(calendarId=calendar_id, eventId=event_id), request_id=event_id)
-    try:
-        batch.execute()
+    logger.info(f"Attempting to delete {len(event_ids)} events concurrently")
+    success = True
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(process_calendar_action, "delete", creds, calendar_id, e_id) for e_id in event_ids]
+        for future in concurrent.futures.as_completed(futures):
+            if not future.result():
+                success = False
+
+    if success:
         logger.info(f"Successfully deleted {len(event_ids)} events")
-        return True
-    except errors.HttpError as error:
-        logger.error(f'An error occurred during batch delete: {error}')
-        return False
+    return success
 
 
-def delete_upcoming_events(service, calendar_id, new_shifts):
+def delete_upcoming_events(service, calendar_id, new_shifts, premium, user_id):
     """Collects shift-related events from the calendar that should be deleted."""
     logger.info("Starting to process upcoming events for deletion")
     matched_shift_indices = set()
     events_to_delete = []
 
-    # Calculate yesterday dynamically
+    tz = pytz.timezone(TIMEZONE)
     start_time_check = get_yesterday()
+    
+    # Pre-compute fingerprints for incoming shifts (O(1) memory map)
+    new_shifts_fingerprints = {}
+    if new_shifts:
+        for idx, new_shift in enumerate(new_shifts):
+            try:
+                summary = create_event_summary(new_shift)
+                start_str = new_shift['intervals'][0]['from']
+                end_str = new_shift['intervals'][0]['to']
+                date_str = start_str.split(" ")[0]  # Extract just the date part
+                description = create_event_description(new_shift, premium, date_str, user_id)
+                new_start = tz.localize(datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S"))
+                new_end = tz.localize(datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S"))
+                key = (new_start.timestamp(), new_end.timestamp(), summary, description)
+                new_shifts_fingerprints[key] = idx
+            except Exception as e:
+                logger.error(f"Error fingerprinting shift: {e}")
 
     try:
-        # Get all events from the calendar
         events_result = service.events().list(calendarId=calendar_id, timeMin=start_time_check.isoformat(),
                                               singleEvents=True,
                                               orderBy='startTime').execute()
@@ -223,42 +198,39 @@ def delete_upcoming_events(service, calendar_id, new_shifts):
             logger.info("No upcoming events found in calendar.")
             return matched_shift_indices, events_to_delete
 
-        # Process only shift-related events
         shift_events_skipped = 0
 
         for event in upcoming_events:
             try:
-                # Check if this shift matches any in new_shifts
-                should_skip = False
-                if new_shifts:
-                    for idx, new_shift in enumerate(new_shifts):
-                        try:
-                            if are_shifts_equal(event, new_shift):
-                                should_skip = True
-                                matched_shift_indices.add(idx)
-                                shift_events_skipped += 1
-                                break
-                        except Exception as e:
-                            logger.error(f"Error comparing shifts: {e}")
-                            continue
+                cal_summary = event.get('summary', '')
+                cal_description = event.get('description', '')
+                cal_start_str = event['start'].get('dateTime', event['start'].get('date', '')).replace('Z', '+00:00')
+                cal_end_str = event['end'].get('dateTime', event['end'].get('date', '')).replace('Z', '+00:00')
 
-                if should_skip:
+                # Ensure valid start strings internally mapping to YYYY-MM-DD
+                if len(cal_start_str) <= 10 or len(cal_end_str) <= 10:
+                    events_to_delete.append(event['id'])
                     continue
 
-                events_to_delete.append(event['id'])
-            except Exception as e:
-                logger.error(f"Error processing event for deletion: {e}")
-                continue
+                cal_start = datetime.fromisoformat(cal_start_str).astimezone(tz)
+                cal_end = datetime.fromisoformat(cal_end_str).astimezone(tz)
+                
+                key = (cal_start.timestamp(), cal_end.timestamp(), cal_summary, cal_description)
 
-        logger.info(
-            f"Found {len(events_to_delete)} events to delete and {shift_events_skipped} matching events to keep")
+                if key in new_shifts_fingerprints:
+                    matched_shift_indices.add(new_shifts_fingerprints[key])
+                    shift_events_skipped += 1
+                else:
+                    events_to_delete.append(event['id'])
+            except Exception as e:
+                logger.error(f"Error processing event footprint: {e}")
+                events_to_delete.append(event['id'])
+
+        logger.info(f"Found {len(events_to_delete)} events to delete and {shift_events_skipped} matching events to keep")
         return matched_shift_indices, events_to_delete
 
     except HttpError as error:
         logger.error(f"Error retrieving events: {error}")
-        return matched_shift_indices, events_to_delete
-    except Exception as e:
-        logger.error(f"Error processing calendar: {e}")
         return matched_shift_indices, events_to_delete
 
 
@@ -269,18 +241,53 @@ def create_event_summary(data):
     return event_summary
 
 
-def create_event_description(data):
+def create_event_description(data, premium, date, user_id):
     description_parts = []
     if data.get('hasBreak'):
         if data['hasBreak']:
             description_parts.append(f"Has 30 min break")
     if data.get('note') is not None:
         description_parts.append(f"note: {data['note']}")
+
+    if premium:
+        try:
+            from McdShiftManager import McdShiftManager
+            from webapp.db_manager import PersonOfInterest
+            manager = McdShiftManager(None, db_path=os.path.join(ROOT_DIR, "db", "mymcd_shifts.sqlite"))
+            
+            # Special Roles
+            special_roles = manager.get_special_roles(date)
+            roles_text = []
+            for role, name in special_roles.items():
+                if name:
+                    roles_text.append(f"{role}: {name}")
+            if roles_text:
+                description_parts.append("\nShift Managers:")
+                description_parts.extend(roles_text)
+            
+            # Coworkers filtering
+            poi_records = PersonOfInterest.query.all()
+            poi_ids = {str(r.mcd_id) for r in poi_records}
+            
+            if poi_ids and user_id is not None:
+                coworkers = manager.get_coworker_shift_times(user_id, date)
+                filtered_coworkers = [c for c in coworkers if str(c['employee_id']) in poi_ids]
+                if filtered_coworkers:
+                    description_parts.append("\nSpecial Coworkers:")
+                    for c in filtered_coworkers:
+                        note_str = f" ({c['note']})" if c['note'] else ""
+                        # Format "YYYY-MM-DD HH:MM:SS" into "HH:MM"
+                        start_time = c['start_time'].split(" ")[1][:5] if " " in c['start_time'] else c['start_time']
+                        end_time = c['end_time'].split(" ")[1][:5] if " " in c['end_time'] else c['end_time']
+                        description_parts.append(f"{c['full_name']}: {start_time} - {end_time}{note_str}")
+        except Exception as e:
+            logger.error(f"Error appending premium data: {e}")
+
     description_parts.append(":)")
     return "\n".join(description_parts)
 
 
-def create_events_from_data(service, calendar_id, data_array, skip_indices=None):
+def create_events_from_data(creds, calendar_id, data_array, skip_indices=None, premium=False, user_id=None):
     if skip_indices is None:
         skip_indices = set()
     events_to_create = []
@@ -308,18 +315,25 @@ def create_events_from_data(service, calendar_id, data_array, skip_indices=None)
                 past_shifts += 1
                 continue
 
+            date_str = start_time_str.split(" ")[0]
             event_summary = create_event_summary(data)
-            event_description = create_event_description(data)
-            event_data = {"summary": event_summary, "description": event_description,
-                          "start": {"dateTime": start_time_str, "timeZone": TIMEZONE, },
-                          "end": {"dateTime": end_time_str, "timeZone": TIMEZONE, }, }
+            event_description = create_event_description(data, premium, date_str, user_id)
+            iso_start = start_time_str.replace(" ", "T")
+            iso_end = end_time_str.replace(" ", "T")
+
+            event_data = {
+                "summary": event_summary, 
+                "description": event_description,
+                "start": {"dateTime": iso_start, "timeZone": TIMEZONE},
+                "end": {"dateTime": iso_end, "timeZone": TIMEZONE}
+            }
             events_to_create.append(event_data)
         except Exception as e:
             logger.error(f"Error processing shift {idx}: {e}")
             continue
 
     if events_to_create:
-        if batch_create_events(service, calendar_id, events_to_create):
+        if batch_create_events(creds, calendar_id, events_to_create):
             events_created = len(events_to_create)
         else:
             events_created = 0
@@ -360,24 +374,37 @@ def sync_user_data(user_id):
         return False
 
     try:
-        data_array = get_shifts_from_website(current_user.mcd_email, current_user.mcd_password)
-        if data_array is None:
-            set_sync_status(user_id, success=False,
-                            error_message="No shifts found for user")
-            return False
-    except Exception:
+        api = MyMcdAPI(current_user.mcd_email, current_user.mcd_password)
+        api.login()
+        
+        today = datetime.today()
+        first_day_this_month = today.replace(day=1)
+        last_day_this_month = (first_day_this_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        first_day_next_month = last_day_this_month + timedelta(days=1)
+        last_day_next_month = (first_day_next_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        
+        from_str = first_day_this_month.strftime("%Y-%m-%d")
+        to_str = last_day_next_month.strftime("%Y-%m-%d")
+        
+        shifts_data = api.get_employee_shifts(from_str, to_str)
+        data_array = shifts_data.get("shiftPlans", [])
+        employee_id = current_user.mcd_id or api.user_id
+    except Exception as e:
+        logger.error(f"Failed to get timetable data: {e}")
         set_sync_status(user_id, success=False,
                         error_message="Failed to get timetable data - check mcd website \n https://mymcd.eu/")
         return False
 
-    matched_shift_indices, events_to_delete = delete_upcoming_events(service, calendar_id, data_array)
-    batch_delete_events(service, calendar_id, events_to_delete)
+    logger.info(f"Processing calendar synchronization logic for user {user_id}...")
 
-    create_events_from_data(service, calendar_id, data_array, matched_shift_indices)
+    matched_shift_indices, events_to_delete = delete_upcoming_events(service, calendar_id, data_array, current_user.premium, employee_id)
+    batch_delete_events(credentials, calendar_id, events_to_delete)
+
+    create_events_from_data(credentials, calendar_id, data_array, matched_shift_indices, current_user.premium, employee_id)
 
     update_last_sync(user_id)
-
     set_sync_status(user_id, success=True, error_message=None)
+    
     return True
 
 
@@ -447,7 +474,7 @@ def create_error_event(user_id, service=None, calendar_id=None):
                     break
 
             if event_ids:
-                batch_delete_events(service, calendar_id, event_ids)
+                batch_delete_events(creds, calendar_id, event_ids)
         except Exception as e:
             logger.error(f"create_error_event: Failed deleting future events for user {user_id}: {e}")
 
@@ -481,13 +508,34 @@ def run_sync_cycle():
 
     # Initialize Flask app context here for each cycle to ensure clean DB connections
     app = Flask(__name__)
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(ROOT_DIR, "db", 'users.db')
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(ROOT_DIR, "db", 'users.sqlite')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     db.init_app(app)
 
     with app.app_context():
         try:
             db.create_all()  # Ensure tables exist
+            
+            try:
+                logger.info("Running global manager shift sync...")
+                manager_api = MyMcdAPI(MANAGER_EMAIL, MANAGER_PASSWORD)
+                manager_api.login()
+                from McdShiftManager import McdShiftManager
+                manager = McdShiftManager(manager_api, db_path=os.path.join(ROOT_DIR, "db", "mymcd_shifts.sqlite"))
+                
+                today = datetime.today()
+                first_day_this_month = today.replace(day=1)
+                last_day_this_month = (first_day_this_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+                first_day_next_month = last_day_this_month + timedelta(days=1)
+                last_day_next_month = (first_day_next_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+                
+                from_str = first_day_this_month.strftime("%Y-%m-%d")
+                to_str = last_day_next_month.strftime("%Y-%m-%d")
+                
+                manager.sync_shifts(from_str, to_str)
+            except Exception as e:
+                logger.error(f"Global manager sync failed: {e}")
+
             users = User.query.all()
             logger.info(f"Found {len(users)} users to sync")
 
@@ -497,7 +545,10 @@ def run_sync_cycle():
 
                 if user.google_name == "temp":
                     try:
-                        name = get_name(user.mcd_email, user.mcd_password)
+                        api = MyMcdAPI(user.mcd_email, user.mcd_password)
+                        api.login()
+                        me = api.get_me()
+                        name = me.get("fullname", "Unknown")
                         create_or_update_user(user.google_id, user.google_email, google_name=name)
                         user.google_name = name
                     except Exception as e:

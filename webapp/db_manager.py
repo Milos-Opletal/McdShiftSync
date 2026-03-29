@@ -16,8 +16,14 @@ class User(db.Model):
     google_calendar_id = db.Column(db.String(255), nullable=True)
     mcd_email = db.Column(db.String(256), unique=True)
     mcd_password = db.Column(db.String(256))
+    mcd_id = db.Column(db.String(128))
+    premium = db.Column(db.Boolean, default=False)
     sync_status = db.Column(db.String(32))
     google_token = db.Column(db.Text)  # Store serialized Google credentials
+
+class PersonOfInterest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    mcd_id = db.Column(db.String(128), unique=True, nullable=False)
 
 # --- DB management and user utility functions ---
 def init_db(app):
@@ -29,7 +35,7 @@ def init_db(app):
 def get_user_by_google_id(google_id):
     return User.query.filter_by(google_id=google_id).first()
 
-def create_or_update_user(google_id, google_email=None, google_name=None, mcd_email=None, mcd_password=None, google_token=None):
+def create_or_update_user(google_id, google_email=None, google_name=None, mcd_email=None, mcd_password=None, mcd_id=None, premium=None, google_token=None):
     user = get_user_by_google_id(google_id)
     if user:
         if google_email:
@@ -40,6 +46,10 @@ def create_or_update_user(google_id, google_email=None, google_name=None, mcd_em
             user.mcd_email = mcd_email
         if mcd_password:
             user.mcd_password = mcd_password
+        if mcd_id:
+            user.mcd_id = mcd_id
+        if premium is not None:
+            user.premium = premium
         if google_token:
             user.google_token = google_token
     else:
@@ -49,6 +59,8 @@ def create_or_update_user(google_id, google_email=None, google_name=None, mcd_em
             google_name=google_name,
             mcd_email=mcd_email,
             mcd_password=mcd_password,
+            mcd_id=mcd_id,
+            premium=premium if premium is not None else False,
             google_token=google_token
         )
         db.session.add(user)

@@ -11,23 +11,19 @@ import re
 import json
 import requests
 
-
-
-
-
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 
 from webapp.db_manager import db, init_db, User, get_user_by_google_id, create_or_update_user, delete_user, update_last_sync, get_sync_status
 from sync import sync_user_data, get_calendar_name, create_calendar
-from webapp.mcd_manager import validate_mcd_credentials, verify_mcd_account
+from MyMcdAPI import MyMcdAPI
 from webapp.translations import translations
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)  # Required for session
 
 # SQLite configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(ROOT_DIR,"db", 'users.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(ROOT_DIR,"db", 'users.sqlite')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Cache control configuration
@@ -216,13 +212,16 @@ def link_mcd():
             }), 400
 
         # Validate McDonald's credentials before saving
-        if validate_mcd_credentials(mcd_email, mcd_password):
-            create_or_update_user(google_id=session['user_id'], google_email=session['email'], mcd_email=mcd_email, mcd_password=mcd_password)
+        try:
+            api = MyMcdAPI(mcd_email, mcd_password)
+            api.login()
+            mcd_id = api.user_id
+            create_or_update_user(google_id=session['user_id'], google_email=session['email'], mcd_email=mcd_email, mcd_password=mcd_password, mcd_id=mcd_id)
             return jsonify({
                 'success': True,
                 'message': 'McDonald\'s account linked successfully!'
             })
-        else:
+        except Exception:
             return jsonify({
                 'success': False,
                 'message': 'Invalid McDonald\'s credentials. Please check your email and password.'
@@ -287,7 +286,12 @@ def api_verify_mcd_account():
         return jsonify({'valid': False, 'error': 'No account config found.'})
     mcd_email = user.mcd_email
     mcd_password = user.mcd_password
-    valid = verify_mcd_account(mcd_email, mcd_password)
+    try:
+        api = MyMcdAPI(mcd_email, mcd_password)
+        api.login()
+        valid = True
+    except Exception:
+        valid = False
     return jsonify({'valid': valid})
 
 
