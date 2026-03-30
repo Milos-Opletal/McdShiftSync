@@ -3,13 +3,8 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# 1. Install system tools required for building Python packages
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. Install Python dependencies directly
-# Versions removed so it installs the latest stable releases
+# Install Python dependencies directly
+# Stripped Playwright and python-dateutil as they are obsolete
 RUN pip install --no-cache-dir \
     protobuf \
     Flask \
@@ -18,23 +13,17 @@ RUN pip install --no-cache-dir \
     google-auth \
     google-auth-oauthlib \
     pytz \
-    python-dateutil \
     requests \
-    playwright \
+    beautifulsoup4 \
     gunicorn
 
-# 3. Install Playwright Browsers + System Dependencies
-# "chromium" is specified to save space. Remove it to install all browsers.
-RUN playwright install --with-deps chromium
-
 # Set environment variables
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 ENV PYTHONUNBUFFERED=1
 
-# 4. Copy application files
+# Copy application files
 COPY . .
 
-# Create db directory
+# Create safely mapped db directory
 RUN mkdir -p /app/db
 
 # Expose the application port

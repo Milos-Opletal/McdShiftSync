@@ -96,6 +96,10 @@ def login():
     session['state'] = state
     # Store the language in the state parameter to preserve it through the OAuth flow
     session['language'] = current_lang
+    
+    # Store the PKCE code verifier generated natively by newer google-auth-oauthlib versions
+    session['code_verifier'] = getattr(flow, 'code_verifier', None)
+    
     return redirect(authorization_url)
 
 @app.route('/oauth2callback')
@@ -112,7 +116,9 @@ def oauth2callback():
         redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
     )
     
-    
+    # Re-apply the PKCE code verifier from the session
+    if session.get('code_verifier'):
+        flow.code_verifier = session['code_verifier']
     
     # Get authorization code from callback
     authorization_response = request.url.replace('http://', 'https://')

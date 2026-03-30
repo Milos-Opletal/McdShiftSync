@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import logging
-import concurrent.futures
+import threading
 from datetime import datetime, timedelta
 import pytz
 from flask import Flask
@@ -114,52 +114,54 @@ def create_calendar(service, calendar_name, user):
 
 
 
-def process_calendar_action(action, creds, calendar_id, payload):
+def execute_batch_async(creds, calendar_id, chunks, action):
+    """Executes batched requests in a background thread."""
     try:
-        # Build thread-safe localized service for this specific network request
+        # Build thread-safe service connection
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-        if action == "create":
-            service.events().insert(calendarId=calendar_id, body=payload).execute()
-        elif action == "delete":
-            service.events().delete(calendarId=calendar_id, eventId=payload).execute()
-        return True
+        for chunk in chunks:
+            batch = service.new_batch_http_request()
+            for item in chunk:
+                if action == "create":
+                    batch.add(service.events().insert(calendarId=calendar_id, body=item))
+                elif action == "delete":
+                    batch.add(service.events().delete(calendarId=calendar_id, eventId=item))
+            try:
+                batch.execute()
+                logger.info(f"Background {action} batch successfully executed.")
+            except Exception as e:
+                logger.error(f"Error executing background {action} batch: {e}")
     except Exception as e:
-        logger.error(f"Error during threaded Google connection ({action}): {e}")
-        return False
+        logger.error(f"Background thread connection error: {e}")
 
 def batch_create_events(creds, calendar_id, events_data):
-    """Create events concurrently to bypass crippling Google Batch latency constraints."""
+    """Queues events into 50-item chunks and processes them via async background thread."""
     if not events_data:
         return False
 
-    logger.info(f"Attempting to create {len(events_data)} events concurrently")
-    success = True
+    logger.info(f"Queuing {len(events_data)} events for background batch creation")
+    chunk_size = 50
+    chunks = [events_data[i:i + chunk_size] for i in range(0, len(events_data), chunk_size)]
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(process_calendar_action, "create", creds, calendar_id, e) for e in events_data]
-        for future in concurrent.futures.as_completed(futures):
-            if not future.result():
-                success = False
-
-    return success
+    # Dispatch async thread
+    thread = threading.Thread(target=execute_batch_async, args=(creds, calendar_id, chunks, "create"), daemon=True)
+    thread.start()
+    return True
 
 
 def batch_delete_events(creds, calendar_id, event_ids):
+    """Queues events into 50-item chunks and processes them via async background thread."""
     if not event_ids:
         return True
 
-    logger.info(f"Attempting to delete {len(event_ids)} events concurrently")
-    success = True
+    logger.info(f"Queuing {len(event_ids)} events for background batch deletion")
+    chunk_size = 50
+    chunks = [event_ids[i:i + chunk_size] for i in range(0, len(event_ids), chunk_size)]
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(process_calendar_action, "delete", creds, calendar_id, e_id) for e_id in event_ids]
-        for future in concurrent.futures.as_completed(futures):
-            if not future.result():
-                success = False
-
-    if success:
-        logger.info(f"Successfully deleted {len(event_ids)} events")
-    return success
+    # Dispatch async thread
+    thread = threading.Thread(target=execute_batch_async, args=(creds, calendar_id, chunks, "delete"), daemon=True)
+    thread.start()
+    return True
 
 
 def delete_upcoming_events(service, calendar_id, new_shifts, premium, user_id):
@@ -353,7 +355,7 @@ def sync_user_data(user_id):
 
     try:
         credentials = Credentials.from_authorized_user_info(json.loads(current_user.google_token))
-        service = build("calendar", "v3", credentials=credentials)
+        service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
     except Exception as e:
         error_message = str(e)
         if "invalid_grant: Token has been expired or revoked." in error_message:
@@ -423,7 +425,7 @@ def create_error_event(user_id, service=None, calendar_id=None):
                     logger.error(f"create_error_event: No Google token for user {user_id}")
                     return False
                 creds = Credentials.from_authorized_user_info(json.loads(user.google_token))
-                service = build("calendar", "v3", credentials=creds)
+                service = build("calendar", "v3", credentials=creds, cache_discovery=False)
             except Exception as e:
                 logger.error(f"create_error_event: Failed to build calendar service for user {user_id}: {e}")
                 return False
@@ -506,7 +508,6 @@ def run_sync_cycle():
     logger.info("Starting sync cycle...")
     start_time = time.time()
 
-    # Initialize Flask app context here for each cycle to ensure clean DB connections
     app = Flask(__name__)
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(ROOT_DIR, "db", 'users.sqlite')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False

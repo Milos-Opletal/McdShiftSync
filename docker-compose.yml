@@ -12,7 +12,6 @@ services:
     networks:
       - nginx_default
     environment:
-      - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
       - PYTHONUNBUFFERED=1
 
   # Service 2: The Background Worker
@@ -26,7 +25,6 @@ services:
     networks:
       - nginx_default
     environment:
-      - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
       - PYTHONUNBUFFERED=1
     depends_on:
       - web

@@ -1,0 +1,1 @@
+docker build -t mcd-shift-sync . ; docker save -o mcd-shift-sync.tar mcd-shift-sync
