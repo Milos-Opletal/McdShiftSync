@@ -4,6 +4,8 @@ Automatically sync your McDonald's work schedule to Google Calendar (and Apple C
 
 McdShiftSync is a self-hosted web application that lets McDonald's employees link their [mymcd.eu](https://mymcd.eu) account to Google Calendar. Once set up, a background worker automatically syncs shifts every 2 hours — no manual work needed.
 
+🌐 **Live at [mymymcd.eu](https://mymymcd.eu)**
+
 ## Features
 
 - **Automatic shift sync** — fetches your shifts from mymcd.eu and creates Google Calendar events every 2 hours
