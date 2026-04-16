@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.idea/
+*.tar
+db/
+.env
+credentials.json
