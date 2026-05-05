@@ -57,6 +57,21 @@ SCOPES = [
 ]
 CLIENT_SECRETS_FILE = os.path.join(ROOT_DIR, "credentials.json")
 
+def get_client_config():
+    if os.environ.get('GOOGLE_CLIENT_ID') and os.environ.get('GOOGLE_CLIENT_SECRET'):
+        return {
+            "web": {
+                "client_id": os.environ.get('GOOGLE_CLIENT_ID'),
+                "project_id": os.environ.get('GOOGLE_PROJECT_ID', ''),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_secret": os.environ.get('GOOGLE_CLIENT_SECRET'),
+                "redirect_uris": [os.environ.get('GOOGLE_REDIRECT_URI', '')]
+            }
+        }
+    return None
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -81,11 +96,19 @@ def login():
     # Clear any existing session
     session.clear()
     
-    flow = Flow.from_client_secrets_file(
-        CLIENT_SECRETS_FILE,
-        scopes=SCOPES,
-        redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
-    )
+    client_config = get_client_config()
+    if client_config:
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=SCOPES,
+            redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
+        )
+    else:
+        flow = Flow.from_client_secrets_file(
+            CLIENT_SECRETS_FILE,
+            scopes=SCOPES,
+            redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
+        )
 
     authorization_url, state = flow.authorization_url(
         access_type='offline',
@@ -109,12 +132,21 @@ def oauth2callback():
     current_lang = session.get('language', 'en')
     state = session['state']
 
-    flow = Flow.from_client_secrets_file(
-        CLIENT_SECRETS_FILE,
-        scopes=SCOPES,
-        state=state,
-        redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
-    )
+    client_config = get_client_config()
+    if client_config:
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=SCOPES,
+            state=state,
+            redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
+        )
+    else:
+        flow = Flow.from_client_secrets_file(
+            CLIENT_SECRETS_FILE,
+            scopes=SCOPES,
+            state=state,
+            redirect_uri=url_for('oauth2callback', _external=True, _scheme='https')
+        )
     
     # Re-apply the PKCE code verifier from the session
     if session.get('code_verifier'):
