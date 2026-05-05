@@ -1,7 +1,10 @@
+version: '3.8'
+
 services:
   # Service 1: The Website
   web:
     image: mcd-shift-sync:latest
+    build: .
     container_name: mcd-shift-sync-web
     restart: unless-stopped
     command: gunicorn --bind 0.0.0.0:4330 --pythonpath /app/webapp app:app
@@ -12,11 +15,13 @@ services:
     networks:
       - nginx_default
     environment:
+      # Keep these static ones here, or move them to the Portainer UI too
       - PYTHONUNBUFFERED=1
 
   # Service 2: The Background Worker
   worker:
     image: mcd-shift-sync:latest
+    build: .
     container_name: mcd-shift-sync-worker
     restart: unless-stopped
     command: python3 /app/sync.py

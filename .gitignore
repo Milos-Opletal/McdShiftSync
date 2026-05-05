@@ -5,3 +5,4 @@ __pycache__/
 db/
 .env
 credentials.json
+webapp/get_ico.py
