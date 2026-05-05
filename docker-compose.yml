@@ -7,7 +7,7 @@ services:
     build: .
     container_name: mcd-shift-sync-web
     restart: unless-stopped
-    command: gunicorn --bind 0.0.0.0:4330 --pythonpath /app/webapp app:app
+    command: gunicorn --workers 1 --threads 1 --timeout 60 --bind 0.0.0.0:4330 --pythonpath /app/webapp app:app 
     ports:
       - "4330:4330"
     volumes:
