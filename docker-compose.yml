@@ -17,6 +17,12 @@ services:
     environment:
       # Keep these static ones here, or move them to the Portainer UI too
       - PYTHONUNBUFFERED=1
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - MANAGER_EMAIL=${MANAGER_EMAIL}
+      - MANAGER_PASSWORD=${MANAGER_PASSWORD}
 
   # Service 2: The Background Worker
   worker:
@@ -31,6 +37,12 @@ services:
       - nginx_default
     environment:
       - PYTHONUNBUFFERED=1
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - MANAGER_EMAIL=${MANAGER_EMAIL}
+      - MANAGER_PASSWORD=${MANAGER_PASSWORD}
     depends_on:
       - web
 
